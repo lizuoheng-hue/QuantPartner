@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from .backtest import run_backtest
@@ -37,7 +37,12 @@ from .schemas import (
     BacktestCreate,
     BacktestOut,
     BacktestResult,
+    AgentCapabilityOut,
+    DashboardMetric,
+    DashboardOut,
+    ExperimentSnapshotOut,
     HealthResponse,
+    IntegrationOut,
     AuditEventOut,
     AuthResponse,
     ChangePasswordRequest,
@@ -46,8 +51,10 @@ from .schemas import (
     MarketDataSnapshotMeta,
     OrderCreate,
     OrderOut,
+    MarketplaceTemplateOut,
     ParseRequest,
     ParseResponse,
+    ProductRoadmapOut,
     StrategyCreate,
     StrategyOut,
     StrategySpecV1,
@@ -203,6 +210,115 @@ def list_data_snapshots(db: Session = Depends(get_db), auth: AuthContext = Depen
     audit(db, auth, "market_data_snapshot.list", "market_data_snapshot")
     db.commit()
     return [snapshot_out(record) for record in records]
+
+
+def audit_out(item: AuditEventRecord) -> AuditEventOut:
+    return AuditEventOut(
+        id=item.id,
+        action=item.action,
+        resource_type=item.resource_type,
+        resource_id=item.resource_id,
+        metadata=json.loads(item.metadata_json),
+        created_at=item.created_at,
+    )
+
+
+@app.get("/api/v1/product/dashboard", response_model=DashboardOut)
+def product_dashboard(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> DashboardOut:
+    strategies_count = db.scalar(select(func.count()).select_from(StrategyRecord).where(StrategyRecord.workspace_id == auth.workspace.id)) or 0
+    backtests_count = db.scalar(select(func.count()).select_from(BacktestRecord).where(BacktestRecord.workspace_id == auth.workspace.id)) or 0
+    completed_backtests = db.scalar(select(func.count()).select_from(BacktestRecord).where(BacktestRecord.workspace_id == auth.workspace.id, BacktestRecord.status == "completed")) or 0
+    active_orders = db.scalar(select(func.count()).select_from(OrderRecord).where(OrderRecord.workspace_id == auth.workspace.id, OrderRecord.account_type == "paper", OrderRecord.status == "accepted")) or 0
+    snapshot_count = db.scalar(select(func.count()).select_from(MarketDataSnapshotRecord)) or 0
+    audits = db.scalars(select(AuditEventRecord).where(AuditEventRecord.workspace_id == auth.workspace.id).order_by(AuditEventRecord.created_at.desc()).limit(8)).all()
+    health_payload = health()
+    return DashboardOut(
+        metrics=[
+            DashboardMetric(label="策略", value=str(strategies_count), hint="已保存策略数量"),
+            DashboardMetric(label="回测", value=f"{completed_backtests}/{backtests_count}", hint="完成/总任务", tone="positive" if completed_backtests else "neutral"),
+            DashboardMetric(label="模拟订单", value=str(active_orders), hint="accepted 状态订单", tone="warning" if active_orders else "neutral"),
+            DashboardMetric(label="行情快照", value=str(snapshot_count), hint="可追溯数据批次", tone="positive" if snapshot_count else "warning"),
+        ],
+        recent_audits=[audit_out(item) for item in audits],
+        system_cards=[
+            {"title": "数据状态", "value": health_payload.dataset, "status": health_payload.status},
+            {"title": "任务队列", "value": f"Redis {health_payload.redis}", "status": "degraded" if health_payload.redis != "connected" else "ok"},
+            {"title": "交易模式", "value": "模拟盘启用 · 实盘关闭", "status": "paper_only"},
+        ],
+    )
+
+
+@app.get("/api/v1/product/experiments", response_model=list[ExperimentSnapshotOut])
+def experiment_snapshots(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> list[ExperimentSnapshotOut]:
+    records = db.scalars(select(BacktestRecord).where(BacktestRecord.workspace_id == auth.workspace.id).order_by(BacktestRecord.created_at.desc()).limit(30)).all()
+    output: list[ExperimentSnapshotOut] = []
+    for record in records:
+        strategy_hash = None
+        data_snapshot_hash = None
+        if record.result_json:
+            try:
+                result = BacktestResult.model_validate_json(record.result_json)
+                strategy_hash = result.strategy_hash
+                data_snapshot_hash = result.data_snapshot.snapshot_hash if result.data_snapshot else None
+            except Exception:
+                strategy_hash = None
+        output.append(ExperimentSnapshotOut(
+            id=record.id,
+            strategy_id=record.strategy_id,
+            status=record.status,
+            stage=record.stage,
+            strategy_hash=strategy_hash,
+            data_snapshot_id=record.data_snapshot_id,
+            data_snapshot_hash=data_snapshot_hash,
+            created_at=record.created_at,
+        ))
+    return output
+
+
+@app.get("/api/v1/product/marketplace", response_model=list[MarketplaceTemplateOut])
+def marketplace_templates(auth: AuthContext = Depends(require_auth)) -> list[MarketplaceTemplateOut]:
+    return [
+        MarketplaceTemplateOut(id="trend-following", name="趋势跟随", category="交易机器人", risk_level="medium", markets=["CN_A", "US"], description="用均线/动量识别中期趋势，适合作为模拟盘机器人起点。", prompt="近60日动量排名靠前买入，跌破20日均线卖出，10%止损"),
+        MarketplaceTemplateOut(id="value-quality", name="价值质量", category="选股策略", risk_level="low", markets=["CN_A", "HK", "US"], description="以 PE、ROE 等基本面指标筛选质量和估值。", prompt="PE低于30且ROE高于12%，月度调仓，ROE跌破8%卖出"),
+        MarketplaceTemplateOut(id="grid-paper", name="网格模拟盘", category="模拟交易", risk_level="high", markets=["US", "HK"], description="仅开放 UI 与模拟盘结构，不接实盘。适合震荡行情实验。", status="preview", prompt="在 SPY 上做5档网格模拟交易，单格2%，总仓位不超过50%"),
+        MarketplaceTemplateOut(id="dca-plan", name="定投 DCA", category="资产配置", risk_level="medium", markets=["US", "HK"], description="按固定周期分批买入，关注成本曲线而非短期择时。", status="preview", prompt="每月定投 SPY，跌破200日均线暂停，恢复后继续"),
+        MarketplaceTemplateOut(id="sector-rotation", name="行业轮动", category="组合策略", risk_level="medium", markets=["CN_A", "US"], description="根据相对强弱在板块间轮动，当前为产品化计划项。", status="planned", prompt="选择近90日强度最高的行业ETF，每月调仓"),
+    ]
+
+
+@app.get("/api/v1/product/integrations", response_model=list[IntegrationOut])
+def integrations(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> list[IntegrationOut]:
+    status = market_data_status(settings)
+    tushare_ready = status.get("CN_A") == "configured"
+    twelve_ready = status.get("US") == "configured" or status.get("HK") == "configured"
+    return [
+        IntegrationOut(id="tushare", name="Tushare Pro", category="data", status="connected" if tushare_ready else "not_configured", description="A股/沪深300真实日线行情与指数数据。", last_checked=datetime.now(timezone.utc)),
+        IntegrationOut(id="twelve-data", name="Twelve Data", category="data", status="connected" if twelve_ready else "not_configured", description="美股/港股日线行情数据源。", last_checked=datetime.now(timezone.utc)),
+        IntegrationOut(id="paper-broker", name="QuantPartner Paper Broker", category="broker", status="paper_only", description="模拟盘订单、撤单和审计已启用。"),
+        IntegrationOut(id="live-broker", name="Live Broker Gateway", category="broker", status="blocked", description="实盘交易入口仅保留 UI 结构，未接入真实下单。"),
+        IntegrationOut(id="feishu-webhook", name="飞书/企业微信通知", category="notification", status="planned", description="回测完成、数据源失效和订单事件通知。"),
+        IntegrationOut(id="mcp-agent", name="MCP Agent Gateway", category="agent", status="planned", description="给 Codex/Cursor/Claude 使用的策略与回测代理接口。"),
+    ]
+
+
+@app.get("/api/v1/product/agents", response_model=list[AgentCapabilityOut])
+def agent_capabilities(auth: AuthContext = Depends(require_auth)) -> list[AgentCapabilityOut]:
+    return [
+        AgentCapabilityOut(id="read", name="只读研究", scope="read:workspace read:backtest read:audit", status="enabled", description="读取策略、回测、审计和数据快照。"),
+        AgentCapabilityOut(id="strategy", name="策略生成", scope="write:strategy parse:strategy", status="enabled", description="生成结构化策略与保存版本。"),
+        AgentCapabilityOut(id="paper-trade", name="模拟盘交易", scope="write:paper_order", status="enabled", description="仅允许模拟盘订单。"),
+        AgentCapabilityOut(id="live-trade", name="实盘交易", scope="write:live_order", status="blocked", description="高风险能力，当前只展示结构，不开放调用。"),
+        AgentCapabilityOut(id="admin", name="管理员自动化", scope="admin:workspace admin:billing", status="planned", description="成员、权限、通知和配额管理。"),
+    ]
+
+
+@app.get("/api/v1/product/roadmap", response_model=list[ProductRoadmapOut])
+def product_roadmap(auth: AuthContext = Depends(require_auth)) -> list[ProductRoadmapOut]:
+    return [
+        ProductRoadmapOut(tier="p1", title="第一优先级：策略实验与回测体验", status="partial", items=["实验快照列表", "策略模板市场", "回测进度/阶段", "数据快照追踪", "澄清式策略生成"]),
+        ProductRoadmapOut(tier="p2", title="第二优先级：产品化运营能力", status="partial", items=["数据源状态", "模拟盘 Broker", "审计日志", "Agent 权限结构", "通知与成员权限占位"]),
+        ProductRoadmapOut(tier="p3-ui", title="第三优先级：高风险/商业化功能结构", status="ui_only", items=["实盘 Broker 网关", "计费/套餐", "移动端/PWA", "多市场扩展", "高级机器人"]),
+    ]
 
 
 @app.get("/api/v1/templates")

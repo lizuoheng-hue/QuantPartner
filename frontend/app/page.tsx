@@ -9,6 +9,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { ChatWorkspace } from "@/components/chat-workspace";
 import { ResultsView } from "@/components/results-view";
 import { PaperTrading } from "@/components/paper-trading";
+import { ProductConsole } from "@/components/product-console";
 import { StrategyInspector } from "@/components/strategy-inspector";
 import { StrategySidebar } from "@/components/strategy-sidebar";
 import { cancelBacktest, changePassword, createStrategy, getAccessToken, getBacktest, getMe, getTemplates, listVersions, parseStrategy, saveVersion, submitBacktest } from "@/lib/api";
@@ -59,6 +60,7 @@ export default function Home() {
   const [saving, setSaving] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [tradingOpen, setTradingOpen] = useState(false);
+  const [productConsoleOpen, setProductConsoleOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordNotice, setPasswordNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
@@ -268,7 +270,7 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><BrandMark /><span>QuantPartner</span><small>量化伴侣</small></div>
         <div className="data-status"><span className="live-dot" /> 数据截至 2026-06-19 · {marketLabel}</div>
-        <div className="workspace-switch"><button type="button" className="paper-button" onClick={() => setTradingOpen(true)}>模拟盘</button><span><strong>{session.workspace.name}</strong><small>{session.user.display_name} · {session.workspace.role}</small></span><button type="button" className="icon-button" aria-label="设置" title="设置" data-testid="settings-button" onClick={() => setSettingsOpen(true)}><Settings size={17} /></button><a className="icon-button" aria-label="退出登录" title="退出登录" data-testid="logout-link" href="/logout"><LogOut size={17} /></a></div>
+        <div className="workspace-switch"><button type="button" className="paper-button" onClick={() => setTradingOpen(true)}>模拟盘</button><button type="button" className="paper-button console-entry" onClick={() => setProductConsoleOpen(true)}>控制台</button><span><strong>{session.workspace.name}</strong><small>{session.user.display_name} · {session.workspace.role}</small></span><button type="button" className="icon-button" aria-label="设置" title="设置" data-testid="settings-button" onClick={() => setSettingsOpen(true)}><Settings size={17} /></button><a className="icon-button" aria-label="退出登录" title="退出登录" data-testid="logout-link" href="/logout"><LogOut size={17} /></a></div>
       </header>
       {result && spec ? (
         <div className="app-body result-layout">
@@ -284,6 +286,13 @@ export default function Home() {
       )}
       {task ? <BacktestProgress task={task} onCancel={handleCancel} /> : null}
       {tradingOpen ? <PaperTrading onClose={() => setTradingOpen(false)} /> : null}
+      {productConsoleOpen ? (
+        <ProductConsole
+          onClose={() => setProductConsoleOpen(false)}
+          onOpenPaperTrading={() => { setProductConsoleOpen(false); setTradingOpen(true); }}
+          onUsePrompt={(prompt) => { setInput(prompt); setProductConsoleOpen(false); setResult(null); }}
+        />
+      ) : null}
       {settingsOpen ? (
         <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">

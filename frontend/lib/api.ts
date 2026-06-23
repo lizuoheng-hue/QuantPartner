@@ -1,4 +1,4 @@
-import type { AuthSession, BacktestTask, PaperOrder, ParseResult, StrategySpec, Template, VersionItem } from "./types";
+import type { AgentCapability, AuthSession, BacktestTask, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, PaperOrder, ParseResult, ProductDashboard, ProductRoadmap, StrategySpec, Template, VersionItem } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "quantpartner:auth-token:v1";
@@ -113,4 +113,28 @@ export function createPaperOrder(payload: { market: "CN_A" | "HK" | "US"; symbol
 
 export function cancelPaperOrder(id: string): Promise<PaperOrder> {
   return request(`/api/v1/paper/orders/${id}`, { method: "DELETE" });
+}
+
+export function getProductDashboard(): Promise<ProductDashboard> {
+  return request("/api/v1/product/dashboard");
+}
+
+export function listExperimentSnapshots(): Promise<ExperimentSnapshot[]> {
+  return request("/api/v1/product/experiments");
+}
+
+export function listMarketplaceTemplates(): Promise<MarketplaceTemplate[]> {
+  return request("/api/v1/product/marketplace");
+}
+
+export function listIntegrations(): Promise<IntegrationStatus[]> {
+  return request("/api/v1/product/integrations");
+}
+
+export function listAgentCapabilities(): Promise<AgentCapability[]> {
+  return request("/api/v1/product/agents");
+}
+
+export function getProductRoadmap(): Promise<ProductRoadmap[]> {
+  return request("/api/v1/product/roadmap");
 }

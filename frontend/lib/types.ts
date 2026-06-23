@@ -133,3 +133,73 @@ export interface PaperOrder {
   client_order_id: string;
   created_at: string;
 }
+
+export interface AuditEvent {
+  id: string;
+  action: string;
+  resource_type: string;
+  resource_id?: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface DashboardMetric {
+  label: string;
+  value: string;
+  hint: string;
+  tone: "neutral" | "positive" | "warning" | "danger";
+}
+
+export interface ProductDashboard {
+  metrics: DashboardMetric[];
+  recent_audits: AuditEvent[];
+  system_cards: Array<{ title: string; value: string; status: string }>;
+}
+
+export interface ExperimentSnapshot {
+  id: string;
+  strategy_id?: string | null;
+  status: string;
+  stage: string;
+  strategy_hash?: string | null;
+  data_snapshot_id?: string | null;
+  data_snapshot_hash?: string | null;
+  engine_version: string;
+  cost_model: string;
+  created_at: string;
+}
+
+export interface MarketplaceTemplate {
+  id: string;
+  name: string;
+  category: string;
+  risk_level: "low" | "medium" | "high";
+  markets: Array<"CN_A" | "HK" | "US">;
+  description: string;
+  status: "ready" | "preview" | "planned";
+  prompt: string;
+}
+
+export interface IntegrationStatus {
+  id: string;
+  name: string;
+  category: "data" | "broker" | "notification" | "agent";
+  status: "connected" | "not_configured" | "paper_only" | "planned" | "blocked";
+  description: string;
+  last_checked?: string | null;
+}
+
+export interface AgentCapability {
+  id: string;
+  name: string;
+  scope: string;
+  status: "enabled" | "planned" | "blocked";
+  description: string;
+}
+
+export interface ProductRoadmap {
+  tier: "p1" | "p2" | "p3-ui";
+  title: string;
+  status: "implemented" | "partial" | "ui_only" | "planned";
+  items: string[];
+}

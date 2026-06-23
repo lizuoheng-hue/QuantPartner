@@ -282,6 +282,67 @@ class AuditEventOut(BaseModel):
     created_at: datetime
 
 
+class DashboardMetric(BaseModel):
+    label: str
+    value: str
+    hint: str
+    tone: Literal["neutral", "positive", "warning", "danger"] = "neutral"
+
+
+class DashboardOut(BaseModel):
+    metrics: list[DashboardMetric]
+    recent_audits: list[AuditEventOut]
+    system_cards: list[dict[str, str]]
+
+
+class ExperimentSnapshotOut(BaseModel):
+    id: str
+    strategy_id: str | None
+    status: str
+    stage: str
+    strategy_hash: str | None = None
+    data_snapshot_id: str | None = None
+    data_snapshot_hash: str | None = None
+    engine_version: str = "quantpartner-backtest-v1"
+    cost_model: str = "cn-a-share-cost-v1"
+    created_at: datetime
+
+
+class MarketplaceTemplateOut(BaseModel):
+    id: str
+    name: str
+    category: str
+    risk_level: Literal["low", "medium", "high"]
+    markets: list[Market]
+    description: str
+    status: Literal["ready", "preview", "planned"] = "ready"
+    prompt: str
+
+
+class IntegrationOut(BaseModel):
+    id: str
+    name: str
+    category: Literal["data", "broker", "notification", "agent"]
+    status: Literal["connected", "not_configured", "paper_only", "planned", "blocked"]
+    description: str
+    last_checked: datetime | None = None
+
+
+class AgentCapabilityOut(BaseModel):
+    id: str
+    name: str
+    scope: str
+    status: Literal["enabled", "planned", "blocked"]
+    description: str
+
+
+class ProductRoadmapOut(BaseModel):
+    tier: Literal["p1", "p2", "p3-ui"]
+    title: str
+    status: Literal["implemented", "partial", "ui_only", "planned"]
+    items: list[str]
+
+
 class OrderCreate(BaseModel):
     market: Market
     symbol: str = Field(min_length=1, max_length=40, pattern=r"^[A-Za-z0-9._-]+$")
