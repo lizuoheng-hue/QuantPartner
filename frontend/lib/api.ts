@@ -1,6 +1,6 @@
 import type { AuthSession, BacktestTask, PaperOrder, ParseResult, StrategySpec, Template, VersionItem } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "quantpartner:auth-token:v1";
 
 export function getAccessToken(): string | null {
