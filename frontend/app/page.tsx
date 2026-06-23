@@ -1,6 +1,7 @@
 "use client";
 
 import { LogOut, Settings, ShieldCheck, X } from "lucide-react";
+import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { BacktestProgress } from "@/components/backtest-progress";
 import { AuthGate } from "@/components/auth-gate";
@@ -10,7 +11,7 @@ import { ResultsView } from "@/components/results-view";
 import { PaperTrading } from "@/components/paper-trading";
 import { StrategyInspector } from "@/components/strategy-inspector";
 import { StrategySidebar } from "@/components/strategy-sidebar";
-import { cancelBacktest, createStrategy, getAccessToken, getBacktest, getMe, getTemplates, listVersions, parseStrategy, saveVersion, submitBacktest } from "@/lib/api";
+import { cancelBacktest, changePassword, createStrategy, getAccessToken, getBacktest, getMe, getTemplates, listVersions, parseStrategy, saveVersion, submitBacktest } from "@/lib/api";
 import type { AuthSession, BacktestResult, BacktestTask, ParseResult, StrategySpec, Template, VersionItem } from "@/lib/types";
 
 const DEFAULT_INPUT = "沪深300里，EMA20上穿EMA60买入，跌破EMA20卖出，8%止损";
@@ -59,6 +60,8 @@ export default function Home() {
   const [hydrated, setHydrated] = useState(false);
   const [tradingOpen, setTradingOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [passwordSaving, setPasswordSaving] = useState(false);
+  const [passwordNotice, setPasswordNotice] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!getAccessToken()) {
@@ -219,6 +222,37 @@ export default function Home() {
     }
   };
 
+  const handlePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPasswordNotice(null);
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const currentPassword = String(data.get("current_password") ?? "");
+    const newPassword = String(data.get("new_password") ?? "");
+    const confirmPassword = String(data.get("confirm_password") ?? "");
+
+    if (newPassword.length < 10) {
+      setPasswordNotice({ type: "error", text: "新密码至少需要 10 位。" });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordNotice({ type: "error", text: "两次输入的新密码不一致。" });
+      return;
+    }
+
+    setPasswordSaving(true);
+    try {
+      await changePassword(currentPassword, newPassword);
+      form.reset();
+      setPasswordNotice({ type: "success", text: "密码已更新，其它设备上的旧会话已失效。" });
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : "";
+      setPasswordNotice({ type: "error", text: message.includes("当前密码") ? "当前密码不正确。" : "暂时无法修改密码，请稍后重试。" });
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
+
   if (authLoading) {
     return <main className="auth-loading"><BrandMark /><span>正在检查安全会话…</span></main>;
   }
@@ -266,6 +300,19 @@ export default function Home() {
                   <div><dt>邮箱</dt><dd>{session.user.email}</dd></div>
                   <div><dt>角色</dt><dd>{session.workspace.role}</dd></div>
                 </dl>
+              </section>
+              <section>
+                <h2>账号安全</h2>
+                <form className="password-form" onSubmit={handlePasswordChange}>
+                  <label>当前密码<input name="current_password" type="password" required autoComplete="current-password" placeholder="输入当前密码" /></label>
+                  <label>新密码<input name="new_password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="至少 10 位" /></label>
+                  <label>确认新密码<input name="confirm_password" type="password" required minLength={10} maxLength={128} autoComplete="new-password" placeholder="再次输入新密码" /></label>
+                  {passwordNotice ? <p className={`settings-notice ${passwordNotice.type}`} role="status">{passwordNotice.text}</p> : null}
+                  <button className="secondary-button" type="submit" disabled={passwordSaving}>
+                    {passwordSaving ? <span className="spinner" /> : null}
+                    {passwordSaving ? "正在更新" : "修改密码"}
+                  </button>
+                </form>
               </section>
               <section>
                 <h2>运行模式</h2>

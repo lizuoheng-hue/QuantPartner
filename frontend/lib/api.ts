@@ -45,6 +45,13 @@ export function getMe(): Promise<AuthSession> {
   return request("/api/v1/auth/me");
 }
 
+export function changePassword(currentPassword: string, newPassword: string): Promise<void> {
+  return request("/api/v1/auth/change-password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}
+
 export async function logoutAccount(): Promise<void> {
   try {
     await request("/api/v1/auth/logout", { method: "POST" });

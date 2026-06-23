@@ -22,6 +22,7 @@ from .db import (
     MembershipRecord,
     OrderRecord,
     SessionLocal,
+    SessionRecord,
     StrategyRecord,
     UserRecord,
     VersionRecord,
@@ -39,6 +40,7 @@ from .schemas import (
     HealthResponse,
     AuditEventOut,
     AuthResponse,
+    ChangePasswordRequest,
     LoginRequest,
     MeResponse,
     MarketDataSnapshotMeta,
@@ -261,6 +263,29 @@ def me(auth: AuthContext = Depends(require_auth)) -> MeResponse:
 def logout(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> Response:
     auth.session.revoked_at = utcnow()
     audit(db, auth, "auth.logout", "session", auth.session.id)
+    db.commit()
+    return Response(status_code=204)
+
+
+@app.post("/api/v1/auth/change-password", status_code=204)
+def change_password(payload: ChangePasswordRequest, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> Response:
+    if not verify_password(payload.current_password, auth.user.password_hash):
+        raise HTTPException(401, "当前密码不正确")
+    if payload.current_password == payload.new_password:
+        raise HTTPException(400, "新密码不能与当前密码相同")
+
+    auth.user.password_hash = hash_password(payload.new_password)
+    other_sessions = db.scalars(
+        select(SessionRecord).where(
+            SessionRecord.user_id == auth.user.id,
+            SessionRecord.id != auth.session.id,
+            SessionRecord.revoked_at.is_(None),
+        )
+    ).all()
+    now = utcnow()
+    for session in other_sessions:
+        session.revoked_at = now
+    audit(db, auth, "auth.password.change", "user", auth.user.id, {"revoked_sessions": len(other_sessions)})
     db.commit()
     return Response(status_code=204)
 
