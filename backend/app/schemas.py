@@ -300,11 +300,16 @@ class ExperimentSnapshotOut(BaseModel):
     strategy_id: str | None
     status: str
     stage: str
+    market: Market
+    benchmark: Benchmark
     strategy_hash: str | None = None
     data_snapshot_id: str | None = None
     data_snapshot_hash: str | None = None
+    annual_return: float | None = None
+    max_drawdown: float | None = None
+    sharpe: float | None = None
     engine_version: str = "quantpartner-backtest-v1"
-    cost_model: str = "cn-a-share-cost-v1"
+    cost_model: str
     created_at: datetime
 
 
@@ -341,6 +346,53 @@ class ProductRoadmapOut(BaseModel):
     title: str
     status: Literal["implemented", "partial", "ui_only", "planned"]
     items: list[str]
+
+
+class NotificationChannelOut(BaseModel):
+    id: str
+    name: str
+    trigger: str
+    status: Literal["enabled", "planned", "blocked"]
+    description: str
+
+
+class AgentToolOut(BaseModel):
+    name: str
+    method: Literal["GET", "POST", "DELETE"]
+    path: str
+    scope: str
+    status: Literal["enabled", "paper_only", "blocked", "planned"]
+    description: str
+
+
+class AgentManifestOut(BaseModel):
+    gateway: str = "/api/agent/v1"
+    mode: Literal["paper_only"] = "paper_only"
+    live_trading_enabled: bool = False
+    audit_required: bool = True
+    tools: list[AgentToolOut]
+
+
+class AgentWorkspaceOut(BaseModel):
+    user: UserOut
+    workspace: WorkspaceOut
+    capabilities: list[AgentCapabilityOut]
+    latest_experiments: list[ExperimentSnapshotOut]
+
+
+class AgentBacktestCreate(BaseModel):
+    spec: StrategySpecV1
+    strategy_id: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
+    dry_run: bool = False
+
+
+class LiveOrderRequest(BaseModel):
+    market: Market
+    symbol: str = Field(min_length=1, max_length=40)
+    side: Literal["buy", "sell"]
+    quantity: Annotated[float, Field(gt=0, le=100_000_000)]
+    reason: str = Field(min_length=4, max_length=240)
 
 
 class OrderCreate(BaseModel):

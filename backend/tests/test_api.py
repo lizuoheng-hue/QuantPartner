@@ -77,3 +77,30 @@ def test_workspace_isolation_and_paper_order_audit():
         assert client.get("/api/v1/paper/orders", headers=second_headers).json() == []
         events = client.get("/api/v1/audit-events", headers=first_headers).json()
         assert any(item["action"] == "paper_order.create" for item in events)
+
+
+def test_product_console_notifications_and_agent_gateway_are_paper_only():
+    with TestClient(app) as client:
+        headers = auth_headers(client, "agent")
+        manifest = client.get("/api/agent/v1/manifest", headers=headers)
+        assert manifest.status_code == 200
+        manifest_json = manifest.json()
+        assert manifest_json["mode"] == "paper_only"
+        assert manifest_json["live_trading_enabled"] is False
+        assert any(tool["name"] == "live_order.create" and tool["status"] == "blocked" for tool in manifest_json["tools"])
+
+        notifications = client.get("/api/v1/product/notifications", headers=headers)
+        assert notifications.status_code == 200
+        assert any(item["id"] == "webhook" for item in notifications.json())
+
+        live_order = client.post("/api/agent/v1/live/orders", headers=headers, json={
+            "market": "US",
+            "symbol": "AAPL",
+            "side": "buy",
+            "quantity": 1,
+            "reason": "agent safety regression test",
+        })
+        assert live_order.status_code == 403
+
+        events = client.get("/api/v1/audit-events", headers=headers).json()
+        assert any(item["action"] == "agent.live_order.blocked" for item in events)

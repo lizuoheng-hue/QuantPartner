@@ -34,10 +34,14 @@ from .db import (
 from .parser import generate_code_preview, parse_strategy
 from .market_data import market_data_status
 from .schemas import (
+    AgentBacktestCreate,
     BacktestCreate,
     BacktestOut,
     BacktestResult,
     AgentCapabilityOut,
+    AgentManifestOut,
+    AgentToolOut,
+    AgentWorkspaceOut,
     DashboardMetric,
     DashboardOut,
     ExperimentSnapshotOut,
@@ -49,6 +53,7 @@ from .schemas import (
     LoginRequest,
     MeResponse,
     MarketDataSnapshotMeta,
+    NotificationChannelOut,
     OrderCreate,
     OrderOut,
     MarketplaceTemplateOut,
@@ -58,6 +63,7 @@ from .schemas import (
     StrategyCreate,
     StrategyOut,
     StrategySpecV1,
+    LiveOrderRequest,
     RegisterRequest,
     UserOut,
     VersionCreate,
@@ -223,6 +229,59 @@ def audit_out(item: AuditEventRecord) -> AuditEventOut:
     )
 
 
+def cost_model_for_market(market: str) -> str:
+    return {
+        "CN_A": "cn-a-share-cost-v1",
+        "HK": "hk-equity-cost-v1",
+        "US": "us-equity-cost-v1",
+    }.get(market, "market-cost-v1")
+
+
+def experiment_out(record: BacktestRecord) -> ExperimentSnapshotOut:
+    spec = StrategySpecV1.model_validate_json(record.spec_json)
+    strategy_hash = None
+    data_snapshot_hash = None
+    annual_return = None
+    max_drawdown = None
+    sharpe = None
+    if record.result_json:
+        try:
+            result = BacktestResult.model_validate_json(record.result_json)
+            strategy_hash = result.strategy_hash
+            data_snapshot_hash = result.data_snapshot.snapshot_hash if result.data_snapshot else None
+            annual_return = result.metrics.annual_return
+            max_drawdown = result.metrics.max_drawdown
+            sharpe = result.metrics.sharpe
+        except Exception:
+            strategy_hash = None
+    return ExperimentSnapshotOut(
+        id=record.id,
+        strategy_id=record.strategy_id,
+        status=record.status,
+        stage=record.stage,
+        market=spec.universe.market,
+        benchmark=spec.backtest.benchmark,
+        strategy_hash=strategy_hash,
+        data_snapshot_id=record.data_snapshot_id,
+        data_snapshot_hash=data_snapshot_hash,
+        annual_return=annual_return,
+        max_drawdown=max_drawdown,
+        sharpe=sharpe,
+        cost_model=cost_model_for_market(spec.universe.market),
+        created_at=record.created_at,
+    )
+
+
+def agent_capability_items() -> list[AgentCapabilityOut]:
+    return [
+        AgentCapabilityOut(id="read", name="只读研究", scope="read:workspace read:backtest read:audit", status="enabled", description="读取策略、回测、审计和数据快照。"),
+        AgentCapabilityOut(id="strategy", name="策略生成", scope="write:strategy parse:strategy", status="enabled", description="生成结构化策略与保存版本。"),
+        AgentCapabilityOut(id="paper-trade", name="模拟盘交易", scope="write:paper_order", status="enabled", description="仅允许模拟盘订单。"),
+        AgentCapabilityOut(id="live-trade", name="实盘交易", scope="write:live_order", status="blocked", description="高风险能力，当前只展示结构，不开放调用。"),
+        AgentCapabilityOut(id="admin", name="管理员自动化", scope="admin:workspace admin:billing", status="planned", description="成员、权限、通知和配额管理。"),
+    ]
+
+
 @app.get("/api/v1/product/dashboard", response_model=DashboardOut)
 def product_dashboard(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> DashboardOut:
     strategies_count = db.scalar(select(func.count()).select_from(StrategyRecord).where(StrategyRecord.workspace_id == auth.workspace.id)) or 0
@@ -251,28 +310,7 @@ def product_dashboard(db: Session = Depends(get_db), auth: AuthContext = Depends
 @app.get("/api/v1/product/experiments", response_model=list[ExperimentSnapshotOut])
 def experiment_snapshots(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> list[ExperimentSnapshotOut]:
     records = db.scalars(select(BacktestRecord).where(BacktestRecord.workspace_id == auth.workspace.id).order_by(BacktestRecord.created_at.desc()).limit(30)).all()
-    output: list[ExperimentSnapshotOut] = []
-    for record in records:
-        strategy_hash = None
-        data_snapshot_hash = None
-        if record.result_json:
-            try:
-                result = BacktestResult.model_validate_json(record.result_json)
-                strategy_hash = result.strategy_hash
-                data_snapshot_hash = result.data_snapshot.snapshot_hash if result.data_snapshot else None
-            except Exception:
-                strategy_hash = None
-        output.append(ExperimentSnapshotOut(
-            id=record.id,
-            strategy_id=record.strategy_id,
-            status=record.status,
-            stage=record.stage,
-            strategy_hash=strategy_hash,
-            data_snapshot_id=record.data_snapshot_id,
-            data_snapshot_hash=data_snapshot_hash,
-            created_at=record.created_at,
-        ))
-    return output
+    return [experiment_out(record) for record in records]
 
 
 @app.get("/api/v1/product/marketplace", response_model=list[MarketplaceTemplateOut])
@@ -297,18 +335,22 @@ def integrations(db: Session = Depends(get_db), auth: AuthContext = Depends(requ
         IntegrationOut(id="paper-broker", name="QuantPartner Paper Broker", category="broker", status="paper_only", description="模拟盘订单、撤单和审计已启用。"),
         IntegrationOut(id="live-broker", name="Live Broker Gateway", category="broker", status="blocked", description="实盘交易入口仅保留 UI 结构，未接入真实下单。"),
         IntegrationOut(id="feishu-webhook", name="飞书/企业微信通知", category="notification", status="planned", description="回测完成、数据源失效和订单事件通知。"),
-        IntegrationOut(id="mcp-agent", name="MCP Agent Gateway", category="agent", status="planned", description="给 Codex/Cursor/Claude 使用的策略与回测代理接口。"),
+        IntegrationOut(id="mcp-agent", name="MCP Agent Gateway", category="agent", status="connected", description="给 Codex/Cursor/Claude 使用的研究、回测和模拟盘代理接口。"),
     ]
 
 
 @app.get("/api/v1/product/agents", response_model=list[AgentCapabilityOut])
 def agent_capabilities(auth: AuthContext = Depends(require_auth)) -> list[AgentCapabilityOut]:
+    return agent_capability_items()
+
+
+@app.get("/api/v1/product/notifications", response_model=list[NotificationChannelOut])
+def notification_channels(auth: AuthContext = Depends(require_auth)) -> list[NotificationChannelOut]:
     return [
-        AgentCapabilityOut(id="read", name="只读研究", scope="read:workspace read:backtest read:audit", status="enabled", description="读取策略、回测、审计和数据快照。"),
-        AgentCapabilityOut(id="strategy", name="策略生成", scope="write:strategy parse:strategy", status="enabled", description="生成结构化策略与保存版本。"),
-        AgentCapabilityOut(id="paper-trade", name="模拟盘交易", scope="write:paper_order", status="enabled", description="仅允许模拟盘订单。"),
-        AgentCapabilityOut(id="live-trade", name="实盘交易", scope="write:live_order", status="blocked", description="高风险能力，当前只展示结构，不开放调用。"),
-        AgentCapabilityOut(id="admin", name="管理员自动化", scope="admin:workspace admin:billing", status="planned", description="成员、权限、通知和配额管理。"),
+        NotificationChannelOut(id="in-app", name="站内通知", trigger="回测完成 / 订单状态变化", status="enabled", description="当前通过控制台和审计流展示，不依赖外部服务。"),
+        NotificationChannelOut(id="webhook", name="Webhook", trigger="数据源异常 / 长任务完成", status="planned", description="预留给企业微信、飞书、Discord 或自定义 HTTP 回调。"),
+        NotificationChannelOut(id="email", name="Email", trigger="账号与风险事件", status="planned", description="适合邮箱验证、密码重置和风控告警。"),
+        NotificationChannelOut(id="sms", name="SMS", trigger="高风险交易确认", status="blocked", description="实盘交易未启用前不开放短信交易确认。"),
     ]
 
 
@@ -316,7 +358,7 @@ def agent_capabilities(auth: AuthContext = Depends(require_auth)) -> list[AgentC
 def product_roadmap(auth: AuthContext = Depends(require_auth)) -> list[ProductRoadmapOut]:
     return [
         ProductRoadmapOut(tier="p1", title="第一优先级：策略实验与回测体验", status="partial", items=["实验快照列表", "策略模板市场", "回测进度/阶段", "数据快照追踪", "澄清式策略生成"]),
-        ProductRoadmapOut(tier="p2", title="第二优先级：产品化运营能力", status="partial", items=["数据源状态", "模拟盘 Broker", "审计日志", "Agent 权限结构", "通知与成员权限占位"]),
+        ProductRoadmapOut(tier="p2", title="第二优先级：产品化运营能力", status="partial", items=["数据源状态", "模拟盘 Broker", "审计日志", "Agent Gateway", "通知与成员权限占位"]),
         ProductRoadmapOut(tier="p3-ui", title="第三优先级：高风险/商业化功能结构", status="ui_only", items=["实盘 Broker 网关", "计费/套餐", "移动端/PWA", "多市场扩展", "高级机器人"]),
     ]
 
@@ -522,8 +564,7 @@ def execute_backtest(backtest_id: str) -> None:
             cache_task_state(record.id, {"status": "failed", "progress": int(record.progress), "stage": "执行失败"})
 
 
-@app.post("/api/v1/backtests", response_model=BacktestOut, status_code=202)
-def create_backtest(payload: BacktestCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> BacktestOut:
+def submit_backtest_record(payload: BacktestCreate | AgentBacktestCreate, background_tasks: BackgroundTasks, db: Session, auth: AuthContext, audit_action: str = "backtest.submit") -> BacktestOut:
     if payload.idempotency_key:
         existing = db.scalar(select(BacktestRecord).where(BacktestRecord.idempotency_key == payload.idempotency_key, BacktestRecord.workspace_id == auth.workspace.id))
         if existing:
@@ -539,10 +580,15 @@ def create_backtest(payload: BacktestCreate, background_tasks: BackgroundTasks, 
         spec_json=payload.spec.model_dump_json(),
     )
     db.add(record)
-    audit(db, auth, "backtest.submit", "backtest", record.id, {"market": payload.spec.universe.market})
+    audit(db, auth, audit_action, "backtest", record.id, {"market": payload.spec.universe.market, "paper_only": True})
     db.commit()
     cache_task_state(record.id, {"status": "queued", "progress": 0, "stage": "等待执行"})
-    if settings.app_env in {"beta", "production"}:
+    if getattr(payload, "dry_run", False):
+        record.status = "cancelled"
+        record.stage = "Agent dry-run 未执行"
+        db.commit()
+        cache_task_state(record.id, {"status": "cancelled", "progress": 0, "stage": "Agent dry-run 未执行"})
+    elif settings.app_env in {"beta", "production"}:
         try:
             enqueue_backtest(record.id)
         except Exception:
@@ -553,6 +599,11 @@ def create_backtest(payload: BacktestCreate, background_tasks: BackgroundTasks, 
     else:
         background_tasks.add_task(execute_backtest, record.id)
     return backtest_out(record)
+
+
+@app.post("/api/v1/backtests", response_model=BacktestOut, status_code=202)
+def create_backtest(payload: BacktestCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> BacktestOut:
+    return submit_backtest_record(payload, background_tasks, db, auth)
 
 
 def backtest_out(record: BacktestRecord) -> BacktestOut:
@@ -640,3 +691,58 @@ def cancel_paper_order(order_id: str, db: Session = Depends(get_db), auth: AuthC
     audit(db, auth, "paper_order.cancel", "order", record.id)
     db.commit()
     return order_out(record)
+
+
+@app.get("/api/agent/v1/manifest", response_model=AgentManifestOut)
+def agent_manifest(auth: AuthContext = Depends(require_auth)) -> AgentManifestOut:
+    return AgentManifestOut(
+        live_trading_enabled=False,
+        tools=[
+            AgentToolOut(name="workspace.read", method="GET", path="/api/agent/v1/workspace", scope="read:workspace", status="enabled", description="读取当前用户、工作区、能力和最近实验。"),
+            AgentToolOut(name="strategy.parse", method="POST", path="/api/agent/v1/strategy/parse", scope="parse:strategy", status="enabled", description="将自然语言转换为受控 StrategySpecV1。"),
+            AgentToolOut(name="backtest.submit", method="POST", path="/api/agent/v1/backtests", scope="write:backtest", status="enabled", description="提交服务端回测任务，可 dry-run。"),
+            AgentToolOut(name="paper_order.create", method="POST", path="/api/agent/v1/paper/orders", scope="write:paper_order", status="paper_only", description="创建模拟盘订单，幂等并审计。"),
+            AgentToolOut(name="live_order.create", method="POST", path="/api/agent/v1/live/orders", scope="write:live_order", status="blocked", description="实盘交易永久默认关闭，当前端点只返回拒绝。"),
+        ],
+    )
+
+
+@app.get("/api/agent/v1/workspace", response_model=AgentWorkspaceOut)
+def agent_workspace(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> AgentWorkspaceOut:
+    records = db.scalars(select(BacktestRecord).where(BacktestRecord.workspace_id == auth.workspace.id).order_by(BacktestRecord.created_at.desc()).limit(5)).all()
+    audit(db, auth, "agent.workspace.read", "agent_gateway", auth.workspace.id, {"paper_only": True})
+    db.commit()
+    return AgentWorkspaceOut(
+        user=UserOut(id=auth.user.id, email=auth.user.email, display_name=auth.user.display_name),
+        workspace=WorkspaceOut(id=auth.workspace.id, name=auth.workspace.name, slug=auth.workspace.slug, role=auth.role),
+        capabilities=agent_capability_items(),
+        latest_experiments=[experiment_out(record) for record in records],
+    )
+
+
+@app.post("/api/agent/v1/strategy/parse", response_model=ParseResponse)
+def agent_parse_strategy(payload: ParseRequest, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> ParseResponse:
+    result = parse_strategy(payload.text)
+    audit(db, auth, "agent.strategy.parse", "agent_gateway", metadata={"compliance_status": result.compliance_status.value, "provider": result.provider})
+    db.commit()
+    return result
+
+
+@app.post("/api/agent/v1/backtests", response_model=BacktestOut, status_code=202)
+def agent_create_backtest(payload: AgentBacktestCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> BacktestOut:
+    return submit_backtest_record(payload, background_tasks, db, auth, "agent.backtest.submit")
+
+
+@app.post("/api/agent/v1/paper/orders", response_model=OrderOut, status_code=201)
+def agent_create_paper_order(payload: OrderCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> OrderOut:
+    order = create_paper_order(payload, db, auth)
+    audit(db, auth, "agent.paper_order.create", "order", order.id, {"paper_only": True, "symbol": order.symbol})
+    db.commit()
+    return order
+
+
+@app.post("/api/agent/v1/live/orders", status_code=403)
+def agent_create_live_order(payload: LiveOrderRequest, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> Response:
+    audit(db, auth, "agent.live_order.blocked", "live_order", metadata={"market": payload.market, "symbol": payload.symbol.upper(), "side": payload.side})
+    db.commit()
+    raise HTTPException(403, "实盘交易默认关闭；Agent 只能使用研究、回测和模拟盘能力。")

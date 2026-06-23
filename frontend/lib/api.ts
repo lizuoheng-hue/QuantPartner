@@ -1,4 +1,4 @@
-import type { AgentCapability, AuthSession, BacktestTask, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, PaperOrder, ParseResult, ProductDashboard, ProductRoadmap, StrategySpec, Template, VersionItem } from "./types";
+import type { AgentCapability, AgentManifest, AuthSession, BacktestTask, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, NotificationChannel, PaperOrder, ParseResult, ProductDashboard, ProductRoadmap, StrategySpec, Template, VersionItem } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "quantpartner:auth-token:v1";
@@ -137,4 +137,12 @@ export function listAgentCapabilities(): Promise<AgentCapability[]> {
 
 export function getProductRoadmap(): Promise<ProductRoadmap[]> {
   return request("/api/v1/product/roadmap");
+}
+
+export function listNotificationChannels(): Promise<NotificationChannel[]> {
+  return request("/api/v1/product/notifications");
+}
+
+export function getAgentManifest(): Promise<AgentManifest> {
+  return request("/api/agent/v1/manifest");
 }

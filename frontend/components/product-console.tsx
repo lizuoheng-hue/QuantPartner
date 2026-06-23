@@ -1,7 +1,8 @@
-import { Bot, CheckCircle2, Database, FlaskConical, KeyRound, Layers3, Lock, RadioTower, ShieldAlert, Sparkles, WalletCards, X } from "lucide-react";
+import { Activity, BellRing, Bot, BrainCircuit, CheckCircle2, Database, FlaskConical, Gauge, KeyRound, Layers3, Lock, RadioTower, Settings, ShieldAlert, Sparkles, TerminalSquare, WalletCards, X } from "lucide-react";
 import { useEffect, useState } from "react";
-import { getProductDashboard, getProductRoadmap, listAgentCapabilities, listExperimentSnapshots, listIntegrations, listMarketplaceTemplates } from "@/lib/api";
-import type { AgentCapability, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, ProductDashboard, ProductRoadmap } from "@/lib/types";
+import type { ReactNode } from "react";
+import { getAgentManifest, getProductDashboard, getProductRoadmap, listAgentCapabilities, listExperimentSnapshots, listIntegrations, listMarketplaceTemplates, listNotificationChannels } from "@/lib/api";
+import type { AgentCapability, AgentManifest, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, NotificationChannel, ProductDashboard, ProductRoadmap } from "@/lib/types";
 
 interface ProductConsoleProps {
   onClose: () => void;
@@ -29,14 +30,44 @@ function shortHash(value?: string | null): string {
   return value ? value.slice(0, 10) : "—";
 }
 
+function formatPct(value?: number | null): string {
+  return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "待生成";
+}
+
+type ConsoleSection = "dashboard" | "bots" | "ai" | "backtest" | "portfolio" | "settings";
+
 export function ProductConsole({ onClose, onUsePrompt, onOpenPaperTrading }: ProductConsoleProps) {
+  const [activeSection, setActiveSection] = useState<ConsoleSection>("dashboard");
   const [dashboard, setDashboard] = useState<ProductDashboard | null>(null);
   const [experiments, setExperiments] = useState<ExperimentSnapshot[]>([]);
   const [marketplace, setMarketplace] = useState<MarketplaceTemplate[]>([]);
   const [integrations, setIntegrations] = useState<IntegrationStatus[]>([]);
   const [agents, setAgents] = useState<AgentCapability[]>([]);
+  const [notifications, setNotifications] = useState<NotificationChannel[]>([]);
+  const [manifest, setManifest] = useState<AgentManifest | null>(null);
   const [roadmap, setRoadmap] = useState<ProductRoadmap[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const consoleNav: Array<{ id: ConsoleSection; label: string; detail: string; icon: ReactNode }> = [
+    { id: "dashboard", label: "Dashboard", detail: "总览", icon: <Gauge size={15} /> },
+    { id: "bots", label: "Trading Bots", detail: "模板孵化", icon: <Bot size={15} /> },
+    { id: "ai", label: "AI Analysis", detail: "Agent/MCP", icon: <BrainCircuit size={15} /> },
+    { id: "backtest", label: "Backtest", detail: "实验快照", icon: <FlaskConical size={15} /> },
+    { id: "portfolio", label: "Portfolio", detail: "模拟盘", icon: <WalletCards size={15} /> },
+    { id: "settings", label: "Settings", detail: "集成与通知", icon: <Settings size={15} /> },
+  ];
+
+  const focusCopy: Record<ConsoleSection, { title: string; body: string; stat: string }> = {
+    dashboard: { title: "私有量化操作台", body: "把 QuantDinger 的一体化工作台结构转译为 QuantPartner 的公测控制塔：研究、回测、模拟盘、Agent 和审计在同一屏完成闭环。", stat: "paper-only" },
+    bots: { title: "策略模板孵化", body: "模板市场先服务研究和模拟盘验证，趋势、价值、网格、DCA 都会落到受控 StrategySpec，不开放无人值守实盘。", stat: `${marketplace.length} templates` },
+    ai: { title: "Agent/MCP 安全网关", body: "Codex、Claude Code、Cursor 可以读取工作区、提交回测和创建模拟盘订单；实盘交易 scope 保持关闭并写审计。", stat: `${manifest?.tools.length ?? 0} tools` },
+    backtest: { title: "可复现实验中心", body: "每次回测绑定策略 hash、数据快照、费用模型和核心指标，用实验快照替代口头判断。", stat: `${experiments.length} runs` },
+    portfolio: { title: "模拟盘运行面板", body: "从策略信号到模拟订单的运营视图，适合做路演后的公测验证和小规模用户训练。", stat: "live off" },
+    settings: { title: "集成与告警矩阵", body: "数据源、Broker、通知、Agent 能力集中展示；缺失凭据、队列降级和高风险通道都显式暴露。", stat: `${integrations.length} integrations` },
+  };
+
+  const botRows = marketplace.slice(0, 4);
+  const activeFocus = focusCopy[activeSection];
 
   useEffect(() => {
     let cancelled = false;
@@ -46,14 +77,18 @@ export function ProductConsole({ onClose, onUsePrompt, onOpenPaperTrading }: Pro
       listMarketplaceTemplates(),
       listIntegrations(),
       listAgentCapabilities(),
+      listNotificationChannels(),
+      getAgentManifest(),
       getProductRoadmap(),
-    ]).then(([nextDashboard, nextExperiments, nextMarketplace, nextIntegrations, nextAgents, nextRoadmap]) => {
+    ]).then(([nextDashboard, nextExperiments, nextMarketplace, nextIntegrations, nextAgents, nextNotifications, nextManifest, nextRoadmap]) => {
       if (cancelled) return;
       setDashboard(nextDashboard);
       setExperiments(nextExperiments);
       setMarketplace(nextMarketplace);
       setIntegrations(nextIntegrations);
       setAgents(nextAgents);
+      setNotifications(nextNotifications);
+      setManifest(nextManifest);
       setRoadmap(nextRoadmap);
     }).finally(() => {
       if (!cancelled) setLoading(false);
@@ -77,13 +112,61 @@ export function ProductConsole({ onClose, onUsePrompt, onOpenPaperTrading }: Pro
 
         {loading ? <div className="product-console-loading"><span className="spinner" /> 正在同步产品化能力…</div> : (
           <div className="product-console-content">
-            <section className="console-hero">
-              <div>
-                <p className="eyebrow">CONTROL TOWER</p>
-                <h2>从路演 MVP 进入开放公测控制塔</h2>
-                <p>这里集中展示实验快照、模板市场、数据源/Broker、Agent 权限、通知与高风险功能的 UI 结构。</p>
+            <section className="console-operating-deck">
+              <nav className="console-os-nav" aria-label="产品化模块">
+                <div className="console-os-brand">
+                  <Sparkles size={17} />
+                  <span><strong>QP OS</strong><small>Public Beta</small></span>
+                </div>
+                {consoleNav.map(item => (
+                  <button type="button" className={activeSection === item.id ? "active" : ""} key={item.id} onClick={() => setActiveSection(item.id)}>
+                    {item.icon}
+                    <span><strong>{item.label}</strong><small>{item.detail}</small></span>
+                  </button>
+                ))}
+              </nav>
+
+              <div className="console-os-stage">
+                <div className="console-os-hero">
+                  <div>
+                    <p className="eyebrow">SELF-HOSTED QUANT STACK</p>
+                    <h2>{activeFocus.title}</h2>
+                    <p>{activeFocus.body}</p>
+                  </div>
+                  <aside>
+                    <span>{activeFocus.stat}</span>
+                    <strong>{manifest?.live_trading_enabled ? "LIVE ENABLED" : "LIVE LOCKED"}</strong>
+                    <small>Agent 默认只允许研究、回测和模拟盘。</small>
+                  </aside>
+                </div>
+
+                <div className="console-os-kpis">
+                  {(dashboard?.metrics ?? []).map(metric => (
+                    <article className={metric.tone} key={metric.label}>
+                      <span>{metric.label}</span>
+                      <strong>{metric.value}</strong>
+                      <small>{metric.hint}</small>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="console-os-table">
+                  <header>
+                    <span><Activity size={14} /> Strategy Market Mode Status</span>
+                    <button type="button" onClick={onOpenPaperTrading}><WalletCards size={14} />模拟盘</button>
+                  </header>
+                  <div>
+                    {botRows.map((template, index) => (
+                      <button type="button" key={template.id} onClick={() => onUsePrompt(template.prompt)} disabled={template.status === "planned"}>
+                        <span><strong>{template.name}</strong><small>{template.category}</small></span>
+                        <code>{template.markets.join("/")}</code>
+                        <em>{index % 2 === 0 ? "Signal" : "Paper"}</em>
+                        <b className={template.status}>{statusLabel(template.status)}</b>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <button type="button" className="primary-button" onClick={onOpenPaperTrading}><WalletCards size={15} />打开模拟盘</button>
             </section>
 
             <section className="console-metrics">
@@ -102,7 +185,8 @@ export function ProductConsole({ onClose, onUsePrompt, onOpenPaperTrading }: Pro
                 <div className="experiment-list">
                   {experiments.length ? experiments.slice(0, 6).map(item => (
                     <div key={item.id}>
-                      <span><strong>{item.status}</strong><small>{item.stage}</small></span>
+                      <span><strong>{item.market} · {item.status}</strong><small>{item.stage} · {item.benchmark}</small></span>
+                      <code>收益 {formatPct(item.annual_return)} · 回撤 {formatPct(item.max_drawdown)} · Sharpe {item.sharpe?.toFixed(2) ?? "待生成"}</code>
                       <code>策略 {shortHash(item.strategy_hash)} · 数据 {shortHash(item.data_snapshot_hash)}</code>
                     </div>
                   )) : <p className="console-empty">完成一次回测后会生成可复现实验快照。</p>}
@@ -156,6 +240,40 @@ export function ProductConsole({ onClose, onUsePrompt, onOpenPaperTrading }: Pro
                     <div className={agent.status} key={agent.id}>
                       {agent.status === "blocked" ? <Lock size={15} /> : <CheckCircle2 size={15} />}
                       <span><strong>{agent.name}</strong><small>{agent.scope}</small></span>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            </section>
+
+            <section className="console-grid">
+              <article className="console-card wide">
+                <header><TerminalSquare size={16} /><h3>Agent Gateway</h3><em>paper-only</em></header>
+                <div className="agent-gateway-summary">
+                  <div><span>Base URL</span><strong>{manifest?.gateway ?? "/api/agent/v1"}</strong></div>
+                  <div><span>执行模式</span><strong>{manifest?.mode === "paper_only" ? "研究 + 回测 + 模拟盘" : "未配置"}</strong></div>
+                  <div><span>实盘权限</span><strong>{manifest?.live_trading_enabled ? "已启用" : "关闭"}</strong></div>
+                  <div><span>审计</span><strong>{manifest?.audit_required ? "强制记录" : "未开启"}</strong></div>
+                </div>
+                <div className="agent-tool-list">
+                  {manifest?.tools.map(tool => (
+                    <div className={tool.status} key={tool.name}>
+                      <code>{tool.method}</code>
+                      <span><strong>{tool.name}</strong><small>{tool.path}</small></span>
+                      <em>{statusLabel(tool.status)}</em>
+                    </div>
+                  ))}
+                </div>
+              </article>
+
+              <article className="console-card">
+                <header><BellRing size={16} /><h3>通知 / 告警</h3><em>P2</em></header>
+                <div className="notification-list">
+                  {notifications.map(channel => (
+                    <div className={channel.status} key={channel.id}>
+                      <span><strong>{channel.name}</strong><small>{channel.trigger}</small></span>
+                      <p>{channel.description}</p>
+                      <em>{statusLabel(channel.status)}</em>
                     </div>
                   ))}
                 </div>

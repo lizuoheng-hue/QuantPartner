@@ -161,9 +161,14 @@ export interface ExperimentSnapshot {
   strategy_id?: string | null;
   status: string;
   stage: string;
+  market: "CN_A" | "HK" | "US";
+  benchmark: "000300.SH" | "HSI.HK" | "SPY.US";
   strategy_hash?: string | null;
   data_snapshot_id?: string | null;
   data_snapshot_hash?: string | null;
+  annual_return?: number | null;
+  max_drawdown?: number | null;
+  sharpe?: number | null;
   engine_version: string;
   cost_model: string;
   created_at: string;
@@ -202,4 +207,29 @@ export interface ProductRoadmap {
   title: string;
   status: "implemented" | "partial" | "ui_only" | "planned";
   items: string[];
+}
+
+export interface NotificationChannel {
+  id: string;
+  name: string;
+  trigger: string;
+  status: "enabled" | "planned" | "blocked";
+  description: string;
+}
+
+export interface AgentTool {
+  name: string;
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  scope: string;
+  status: "enabled" | "paper_only" | "blocked" | "planned";
+  description: string;
+}
+
+export interface AgentManifest {
+  gateway: string;
+  mode: "paper_only";
+  live_trading_enabled: boolean;
+  audit_required: boolean;
+  tools: AgentTool[];
 }
