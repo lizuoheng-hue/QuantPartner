@@ -65,11 +65,34 @@ export interface Trade {
   fee: number;
 }
 
+export interface DiagnosisItem {
+  title: string;
+  level: "positive" | "warning" | "danger" | "neutral";
+  metric_refs: string[];
+  explanation: string;
+}
+
+export interface ImprovementSuggestion {
+  title: string;
+  rationale: string;
+  action_type: "parameter_change" | "condition_change" | "risk_control" | "stress_test";
+  patch?: Record<string, unknown> | null;
+  safety_note: string;
+}
+
+export interface BacktestDiagnosis {
+  summary: string;
+  items: DiagnosisItem[];
+  suggestions: ImprovementSuggestion[];
+  disclaimer: string;
+}
+
 export interface BacktestResult {
   summary: string;
   disclaimer: string;
   code_preview: string;
   metrics: MetricSet;
+  diagnosis: BacktestDiagnosis;
   equity_curve: SeriesPoint[];
   benchmark_curve: SeriesPoint[];
   drawdown_curve: SeriesPoint[];
@@ -107,9 +130,39 @@ export interface BacktestTask {
 
 export interface VersionItem {
   id: string;
+  strategy_id: string;
   label: string;
   created_at: string;
   spec?: StrategySpec;
+  note?: string | null;
+}
+
+export interface StrategySummary {
+  id: string;
+  name: string;
+  market: "CN_A" | "HK" | "US";
+  benchmark: "000300.SH" | "HSI.HK" | "SPY.US";
+  latest_version_id: string;
+  latest_version_label?: string | null;
+  latest_version_at?: string | null;
+  version_count: number;
+  backtest_count: number;
+  annual_return?: number | null;
+  max_drawdown?: number | null;
+  win_rate?: number | null;
+  status: "draft" | "backtested" | "archived";
+  created_at: string;
+}
+
+export interface VersionDetail extends VersionItem {
+  spec: StrategySpec;
+  backtest?: BacktestResult | null;
+  backtest_id?: string | null;
+  backtest_created_at?: string | null;
+}
+
+export interface StrategyDetail extends StrategySummary {
+  versions: VersionDetail[];
 }
 
 export interface AuthSession {

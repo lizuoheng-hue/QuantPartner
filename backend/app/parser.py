@@ -14,14 +14,16 @@ NUMBER = r"(\d+(?:\.\d+)?)"
 
 
 def generate_code_preview(spec) -> str:
-    entry = spec.entry.conditions[0]
-    exit_condition = spec.exit.conditions[0]
+    entry = next((condition for condition in spec.entry.conditions if condition.enabled), spec.entry.conditions[0] if spec.entry.conditions else None)
+    exit_condition = next((condition for condition in spec.exit.conditions if condition.enabled), spec.exit.conditions[0] if spec.exit.conditions else None)
     risk = spec.exit.risk_controls
+    entry_preview = f'condition("{entry.field}", "{entry.operator.value}", {entry.value!r}, {entry.params!r})' if entry else "False"
+    exit_preview = f'condition("{exit_condition.field}", "{exit_condition.operator.value}", {exit_condition.value!r}, {exit_condition.params!r})' if exit_condition else "False"
     return f'''# 由 StrategySpecV1 确定性生成，仅供审阅
 def strategy(context, data):
     universe = index_members("{spec.universe.index}")
-    entry_signal = condition("{entry.field}", "{entry.operator.value}", {entry.value!r}, {entry.params!r})
-    exit_signal = condition("{exit_condition.field}", "{exit_condition.operator.value}", {exit_condition.value!r}, {exit_condition.params!r})
+    entry_signal = {entry_preview}
+    exit_signal = {exit_preview}
 
     if entry_signal and not context.position:
         context.buy_next_open(max_position={risk.max_position_pct or 100} / 100)

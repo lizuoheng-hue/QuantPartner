@@ -150,6 +150,23 @@ class StrategyOut(BaseModel):
     created_at: datetime
 
 
+class StrategySummaryOut(BaseModel):
+    id: str
+    name: str
+    market: Market
+    benchmark: Benchmark
+    latest_version_id: str
+    latest_version_label: str | None = None
+    latest_version_at: datetime | None = None
+    version_count: int = 0
+    backtest_count: int = 0
+    annual_return: float | None = None
+    max_drawdown: float | None = None
+    win_rate: float | None = None
+    status: Literal["draft", "backtested", "archived"] = "draft"
+    created_at: datetime
+
+
 class BacktestCreate(BaseModel):
     spec: StrategySpecV1
     strategy_id: str | None = None
@@ -198,11 +215,34 @@ class MarketDataSnapshotMeta(BaseModel):
     fetched_at: datetime
 
 
+class DiagnosisItem(BaseModel):
+    title: str
+    level: Literal["positive", "warning", "danger", "neutral"]
+    metric_refs: list[str]
+    explanation: str
+
+
+class ImprovementSuggestion(BaseModel):
+    title: str
+    rationale: str
+    action_type: Literal["parameter_change", "condition_change", "risk_control", "stress_test"]
+    patch: dict | None = None
+    safety_note: str
+
+
+class BacktestDiagnosis(BaseModel):
+    summary: str
+    items: list[DiagnosisItem]
+    suggestions: list[ImprovementSuggestion]
+    disclaimer: str = "以下诊断基于历史回测与规则化指标解释，不构成任何投资建议。"
+
+
 class BacktestResult(BaseModel):
     summary: str
     disclaimer: str = "以上分析基于历史数据模拟，不构成任何投资建议。"
     code_preview: str
     metrics: MetricSet
+    diagnosis: BacktestDiagnosis
     equity_curve: list[SeriesPoint]
     benchmark_curve: list[SeriesPoint]
     drawdown_curve: list[SeriesPoint]
@@ -221,6 +261,16 @@ class BacktestOut(BaseModel):
     data_snapshot_id: str | None = None
     error: str | None = None
     created_at: datetime
+
+
+class VersionDetailOut(VersionOut):
+    backtest: BacktestResult | None = None
+    backtest_id: str | None = None
+    backtest_created_at: datetime | None = None
+
+
+class StrategyDetailOut(StrategySummaryOut):
+    versions: list[VersionDetailOut]
 
 
 class HealthResponse(BaseModel):

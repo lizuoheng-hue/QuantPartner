@@ -1,4 +1,4 @@
-import type { AgentCapability, AgentManifest, AuthSession, BacktestTask, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, NotificationChannel, PaperOrder, ParseResult, ProductDashboard, ProductRoadmap, StrategySpec, Template, VersionItem } from "./types";
+import type { AgentCapability, AgentManifest, AuthSession, BacktestTask, ExperimentSnapshot, IntegrationStatus, MarketplaceTemplate, NotificationChannel, PaperOrder, ParseResult, ProductDashboard, ProductRoadmap, StrategyDetail, StrategySpec, StrategySummary, Template, VersionItem } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
 const TOKEN_KEY = "quantpartner:auth-token:v1";
@@ -80,6 +80,14 @@ export function saveVersion(strategyId: string, spec: StrategySpec): Promise<Ver
     method: "POST",
     body: JSON.stringify({ spec, note: "参数调整" }),
   });
+}
+
+export function listStrategies(): Promise<StrategySummary[]> {
+  return request("/api/v1/strategies");
+}
+
+export function getStrategy(strategyId: string): Promise<StrategyDetail> {
+  return request(`/api/v1/strategies/${strategyId}`);
 }
 
 export function listVersions(strategyId: string): Promise<VersionItem[]> {

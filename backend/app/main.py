@@ -3,10 +3,13 @@ import logging
 import re
 import time
 import uuid
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from io import StringIO
+import csv
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -61,12 +64,15 @@ from .schemas import (
     ParseResponse,
     ProductRoadmapOut,
     StrategyCreate,
+    StrategyDetailOut,
     StrategyOut,
+    StrategySummaryOut,
     StrategySpecV1,
     LiveOrderRequest,
     RegisterRequest,
     UserOut,
     VersionCreate,
+    VersionDetailOut,
     VersionOut,
     WorkspaceOut,
 )
@@ -76,6 +82,10 @@ from .templates import TEMPLATES
 logging.basicConfig(level=logging.INFO, format='{"level":"%(levelname)s","message":"%(message)s"}')
 logger = logging.getLogger("quantpartner")
 settings = get_settings()
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 180
+RATE_LIMIT_EXEMPT_PREFIXES = ("/api/v1/health", "/health", "/docs", "/openapi.json")
+rate_limit_buckets: dict[str, deque[float]] = defaultdict(deque)
 
 
 def audit(db: Session, auth: AuthContext, action: str, resource_type: str, resource_id: str | None = None, metadata: dict | None = None) -> None:
@@ -122,6 +132,22 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def rate_limit(request: Request, call_next):
+    if request.url.path.startswith(RATE_LIMIT_EXEMPT_PREFIXES):
+        return await call_next(request)
+    client = request.client.host if request.client else "unknown"
+    key = f"{client}:{request.url.path.split('/')[1:3]}"
+    now = time.monotonic()
+    bucket = rate_limit_buckets[key]
+    while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SECONDS:
+        bucket.popleft()
+    if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
+        return Response("请求过于频繁，请稍后重试。", status_code=429, media_type="text/plain; charset=utf-8")
+    bucket.append(now)
+    return await call_next(request)
+
+
 def version_out(record: VersionRecord) -> VersionOut:
     return VersionOut(
         id=record.id,
@@ -129,6 +155,82 @@ def version_out(record: VersionRecord) -> VersionOut:
         label=record.label,
         spec=StrategySpecV1.model_validate(record.spec),
         note=record.note,
+        created_at=record.created_at,
+    )
+
+
+def latest_completed_backtest_for_spec(db: Session, strategy_id: str, spec_json: str | None = None) -> BacktestRecord | None:
+    query = select(BacktestRecord).where(
+        BacktestRecord.strategy_id == strategy_id,
+        BacktestRecord.status == "completed",
+        BacktestRecord.result_json.is_not(None),
+    )
+    records = db.scalars(query.order_by(BacktestRecord.created_at.desc()).limit(50 if spec_json is not None else 1)).all()
+    if spec_json is None:
+        return records[0] if records else None
+    target = json.loads(spec_json)
+    for record in records:
+        if json.loads(record.spec_json) == target:
+            return record
+    return None
+
+
+def parse_backtest_result(result_json: str) -> BacktestResult:
+    payload = json.loads(result_json)
+    if "diagnosis" not in payload:
+        payload["diagnosis"] = {
+            "summary": payload.get("summary", "该版本生成于旧版回测引擎，暂无完整 AI 诊断。"),
+            "items": [],
+            "suggestions": [],
+            "disclaimer": payload.get("disclaimer", "以下诊断基于历史回测与规则化指标解释，不构成任何投资建议。"),
+        }
+    return BacktestResult.model_validate(payload)
+
+
+def next_version_label(db: Session, strategy_id: str) -> str:
+    count = db.scalar(select(func.count()).select_from(VersionRecord).where(VersionRecord.strategy_id == strategy_id)) or 0
+    return f"v{count + 1:03d}"
+
+
+def version_detail_out(record: VersionRecord, backtest: BacktestRecord | None = None) -> VersionDetailOut:
+    return VersionDetailOut(
+        id=record.id,
+        strategy_id=record.strategy_id,
+        label=record.label,
+        spec=StrategySpecV1.model_validate(record.spec),
+        note=record.note,
+        created_at=record.created_at,
+        backtest=parse_backtest_result(backtest.result_json) if backtest and backtest.result_json else None,
+        backtest_id=backtest.id if backtest else None,
+        backtest_created_at=backtest.created_at if backtest else None,
+    )
+
+
+def strategy_summary_out(db: Session, record: StrategyRecord) -> StrategySummaryOut:
+    latest_version = db.get(VersionRecord, record.latest_version_id) if record.latest_version_id else None
+    if latest_version is None:
+        latest_version = db.scalars(select(VersionRecord).where(VersionRecord.strategy_id == record.id).order_by(VersionRecord.created_at.desc()).limit(1)).first()
+    spec = StrategySpecV1.model_validate(latest_version.spec) if latest_version else TEMPLATES["ema-cross"]()
+    latest_backtest = latest_completed_backtest_for_spec(db, record.id)
+    metrics = None
+    if latest_backtest and latest_backtest.result_json:
+        metrics = parse_backtest_result(latest_backtest.result_json).metrics
+    version_count = db.scalar(select(func.count()).select_from(VersionRecord).where(VersionRecord.strategy_id == record.id)) or 0
+    backtest_count = db.scalar(select(func.count()).select_from(BacktestRecord).where(BacktestRecord.strategy_id == record.id, BacktestRecord.status == "completed")) or 0
+    return StrategySummaryOut(
+        id=record.id,
+        name=record.name,
+        market=spec.universe.market,
+        benchmark=spec.backtest.benchmark,
+        latest_version_id=latest_version.id if latest_version else record.latest_version_id,
+        latest_version_label=latest_version.label if latest_version else None,
+        latest_version_at=latest_version.created_at if latest_version else None,
+        version_count=version_count,
+        backtest_count=backtest_count,
+        annual_return=metrics.annual_return if metrics else None,
+        max_drawdown=metrics.max_drawdown if metrics else None,
+        win_rate=metrics.win_rate if metrics else None,
+        status="backtested" if metrics else "draft",
         created_at=record.created_at,
     )
 
@@ -200,6 +302,11 @@ def health() -> HealthResponse:
     )
 
 
+@app.get("/health", response_model=HealthResponse)
+def root_health() -> HealthResponse:
+    return health()
+
+
 @app.get("/api/v1/data/status")
 def data_status() -> dict:
     return {
@@ -246,7 +353,7 @@ def experiment_out(record: BacktestRecord) -> ExperimentSnapshotOut:
     sharpe = None
     if record.result_json:
         try:
-            result = BacktestResult.model_validate_json(record.result_json)
+            result = parse_backtest_result(record.result_json)
             strategy_hash = result.strategy_hash
             data_snapshot_hash = result.data_snapshot.snapshot_hash if result.data_snapshot else None
             annual_return = result.metrics.annual_return
@@ -453,10 +560,9 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db), auth
     strategy = StrategyRecord(name=payload.name, workspace_id=auth.workspace.id)
     db.add(strategy)
     db.flush()
-    now = datetime.now().astimezone()
     version = VersionRecord(
         strategy_id=strategy.id,
-        label=f"v{now:%Y%m%d_%H:%M}",
+        label=next_version_label(db, strategy.id),
         spec_json=json.dumps(payload.spec.model_dump(mode="json"), ensure_ascii=False),
         note="初始版本",
     )
@@ -468,15 +574,34 @@ def create_strategy(payload: StrategyCreate, db: Session = Depends(get_db), auth
     return StrategyOut(id=strategy.id, name=strategy.name, latest_version_id=version.id, created_at=strategy.created_at)
 
 
+@app.get("/api/v1/strategies", response_model=list[StrategySummaryOut])
+def list_strategies(db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> list[StrategySummaryOut]:
+    records = db.scalars(select(StrategyRecord).where(StrategyRecord.workspace_id == auth.workspace.id).order_by(StrategyRecord.created_at.desc())).all()
+    return [strategy_summary_out(db, record) for record in records]
+
+
+@app.get("/api/v1/strategies/{strategy_id}", response_model=StrategyDetailOut)
+def get_strategy(strategy_id: str, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> StrategyDetailOut:
+    strategy = db.get(StrategyRecord, strategy_id)
+    if not strategy or strategy.workspace_id != auth.workspace.id:
+        raise HTTPException(404, "策略不存在")
+    summary = strategy_summary_out(db, strategy)
+    versions = db.scalars(select(VersionRecord).where(VersionRecord.strategy_id == strategy_id).order_by(VersionRecord.created_at.desc())).all()
+    detail_versions = [
+        version_detail_out(version, latest_completed_backtest_for_spec(db, strategy_id, version.spec_json))
+        for version in versions
+    ]
+    return StrategyDetailOut(**summary.model_dump(), versions=detail_versions)
+
+
 @app.post("/api/v1/strategies/{strategy_id}/versions", response_model=VersionOut, status_code=201)
 def create_version(strategy_id: str, payload: VersionCreate, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> VersionOut:
     strategy = db.get(StrategyRecord, strategy_id)
     if not strategy or strategy.workspace_id != auth.workspace.id:
         raise HTTPException(404, "策略不存在")
-    now = datetime.now().astimezone()
     version = VersionRecord(
         strategy_id=strategy_id,
-        label=f"v{now:%Y%m%d_%H:%M}",
+        label=next_version_label(db, strategy_id),
         spec_json=json.dumps(payload.spec.model_dump(mode="json"), ensure_ascii=False),
         note=payload.note,
     )
@@ -542,10 +667,9 @@ def execute_backtest(backtest_id: str) -> None:
             if record.strategy_id:
                 strategy = db.get(StrategyRecord, record.strategy_id)
                 if strategy:
-                    now = datetime.now().astimezone()
                     version = VersionRecord(
                         strategy_id=strategy.id,
-                        label=f"v{now:%Y%m%d_%H:%M}",
+                        label=next_version_label(db, strategy.id),
                         spec_json=record.spec_json,
                         note="回测完成自动保存",
                     )
@@ -612,7 +736,7 @@ def backtest_out(record: BacktestRecord) -> BacktestOut:
         status=record.status,
         progress=int(record.progress),
         stage=record.stage,
-        result=BacktestResult.model_validate_json(record.result_json) if record.result_json else None,
+        result=parse_backtest_result(record.result_json) if record.result_json else None,
         data_snapshot_id=record.data_snapshot_id,
         error=record.error,
         created_at=record.created_at,
@@ -646,7 +770,24 @@ def get_trades(backtest_id: str, db: Session = Depends(get_db), auth: AuthContex
     record = db.get(BacktestRecord, backtest_id)
     if not record or record.workspace_id != auth.workspace.id or not record.result_json:
         raise HTTPException(404, "交易记录尚未生成")
-    return BacktestResult.model_validate_json(record.result_json).trades
+    return parse_backtest_result(record.result_json).trades
+
+
+@app.get("/api/v1/backtests/{backtest_id}/trades.csv")
+def export_trades_csv(backtest_id: str, db: Session = Depends(get_db), auth: AuthContext = Depends(require_auth)) -> Response:
+    record = db.get(BacktestRecord, backtest_id)
+    if not record or record.workspace_id != auth.workspace.id or not record.result_json:
+        raise HTTPException(404, "交易记录尚未生成")
+    result = parse_backtest_result(record.result_json)
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["date", "symbol", "name", "side", "price", "quantity", "fee"])
+    for trade in result.trades:
+        writer.writerow([trade.date, trade.symbol, trade.name, trade.side, trade.price, trade.quantity, trade.fee])
+    audit(db, auth, "backtest.trades.export", "backtest", record.id, {"format": "csv", "rows": len(result.trades)})
+    db.commit()
+    headers = {"Content-Disposition": f'attachment; filename="quantpartner-trades-{backtest_id}.csv"'}
+    return Response(output.getvalue(), media_type="text/csv; charset=utf-8", headers=headers)
 
 
 @app.get("/api/v1/audit-events", response_model=list[AuditEventOut])

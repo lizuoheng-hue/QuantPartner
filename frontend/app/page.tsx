@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, Settings, ShieldCheck, X } from "lucide-react";
+import { FolderClock, LogOut, Settings, ShieldCheck, X } from "lucide-react";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { BacktestProgress } from "@/components/backtest-progress";
@@ -10,10 +10,11 @@ import { ChatWorkspace } from "@/components/chat-workspace";
 import { ResultsView } from "@/components/results-view";
 import { PaperTrading } from "@/components/paper-trading";
 import { ProductConsole } from "@/components/product-console";
+import { StrategyHistoryPanel } from "@/components/strategy-history-panel";
 import { StrategyInspector } from "@/components/strategy-inspector";
 import { StrategySidebar } from "@/components/strategy-sidebar";
 import { cancelBacktest, changePassword, createStrategy, getAccessToken, getBacktest, getMe, getTemplates, listVersions, parseStrategy, saveVersion, submitBacktest } from "@/lib/api";
-import type { AuthSession, BacktestResult, BacktestTask, ParseResult, StrategySpec, Template, VersionItem } from "@/lib/types";
+import type { AuthSession, BacktestResult, BacktestTask, ParseResult, StrategyDetail, StrategySpec, Template, VersionDetail, VersionItem } from "@/lib/types";
 
 const DEFAULT_INPUT = "沪深300里，EMA20上穿EMA60买入，跌破EMA20卖出，8%止损";
 const WORKSPACE_KEY_PREFIX = "quantpartner:workspace:v2";
@@ -59,6 +60,7 @@ export default function Home() {
   const [versions, setVersions] = useState<VersionItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [hydrated, setHydrated] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [tradingOpen, setTradingOpen] = useState(false);
   const [productConsoleOpen, setProductConsoleOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -206,11 +208,17 @@ export default function Home() {
   };
 
   const handleSave = async () => {
-    if (!spec || !strategyId) return;
+    if (!spec) return;
     setSaving(true);
     try {
-      await saveVersion(strategyId, spec);
-      await refreshVersions(strategyId);
+      let id = strategyId;
+      if (!id) {
+        const created = await createStrategy(spec);
+        id = created.id;
+        setStrategyId(id);
+      }
+      await saveVersion(id, spec);
+      await refreshVersions(id);
     } finally {
       setSaving(false);
     }
@@ -222,6 +230,56 @@ export default function Home() {
       setResult(null);
       setParseResult(previous => previous ? { ...previous, message: `已恢复 ${version.label}。` } : previous);
     }
+  };
+
+  const handleApplySuggestion = (patch: Record<string, unknown> | null | undefined, title: string) => {
+    if (!spec) return;
+    const next = structuredClone(spec);
+    const riskPatch = patch?.risk_controls as { stop_loss_pct?: number } | undefined;
+    const windows = patch?.windows as string[][] | undefined;
+    if (riskPatch?.stop_loss_pct !== undefined) {
+      next.exit.risk_controls.stop_loss_pct = riskPatch.stop_loss_pct;
+    }
+    if (windows?.[0]?.[0] && windows[0][1]) {
+      next.backtest.start_date = windows[0][0];
+      next.backtest.end_date = windows[0][1];
+    }
+    const entryPatch = patch?.entry_condition as { params?: Record<string, number | string> } | undefined;
+    if (entryPatch?.params && next.entry.conditions[0]) {
+      next.entry.conditions[0].params = { ...next.entry.conditions[0].params, ...entryPatch.params };
+    }
+    setSpec(next);
+    setResult(null);
+    setParseResult(previous => ({
+      spec: next,
+      confidence: previous?.confidence ?? 1,
+      clarification_questions: previous?.clarification_questions ?? [],
+      compliance_status: previous?.compliance_status ?? "safe",
+      message: `已应用“${title}”为策略草稿，请确认条件后重新运行回测。`,
+      provider: "diagnosis-suggestion",
+      code_preview: previous?.code_preview,
+    }));
+  };
+
+  const handleLoadVersion = async (strategy: StrategyDetail, version: VersionDetail) => {
+    setStrategyId(strategy.id);
+    setSpec(version.spec);
+    setSelectedId(strategy.id);
+    setCode(version.backtest?.code_preview ?? "");
+    setResult(version.backtest ?? null);
+    setBacktestId(version.backtest_id ?? null);
+    setTask(null);
+    setHistoryOpen(false);
+    setParseResult({
+      spec: version.spec,
+      confidence: 1,
+      clarification_questions: [],
+      compliance_status: "safe",
+      message: `已载入 ${strategy.name} / ${version.label}，可以查看详情或继续修改条件。`,
+      provider: "version-history",
+      code_preview: version.backtest?.code_preview,
+    });
+    await refreshVersions(strategy.id);
   };
 
   const handlePasswordChange = async (event: FormEvent<HTMLFormElement>) => {
@@ -270,12 +328,12 @@ export default function Home() {
       <header className="topbar">
         <div className="brand"><BrandMark /><span>QuantPartner</span><small>量化伴侣</small></div>
         <div className="data-status"><span className="live-dot" /> 数据截至 2026-06-19 · {marketLabel}</div>
-        <div className="workspace-switch"><button type="button" className="paper-button" onClick={() => setTradingOpen(true)}>模拟盘</button><button type="button" className="paper-button console-entry" onClick={() => setProductConsoleOpen(true)}>控制台</button><span><strong>{session.workspace.name}</strong><small>{session.user.display_name} · {session.workspace.role}</small></span><button type="button" className="icon-button" aria-label="设置" title="设置" data-testid="settings-button" onClick={() => setSettingsOpen(true)}><Settings size={17} /></button><a className="icon-button" aria-label="退出登录" title="退出登录" data-testid="logout-link" href="/logout"><LogOut size={17} /></a></div>
+        <div className="workspace-switch"><button type="button" className="paper-button" onClick={() => setTradingOpen(true)}>模拟盘</button><button type="button" className="paper-button console-entry" onClick={() => setProductConsoleOpen(true)}>控制台</button><button type="button" className="paper-button history-entry" onClick={() => setHistoryOpen(true)}><FolderClock size={13} />我的策略</button><span><strong>{session.workspace.name}</strong><small>{session.user.display_name} · {session.workspace.role}</small></span><button type="button" className="icon-button" aria-label="设置" title="设置" data-testid="settings-button" onClick={() => setSettingsOpen(true)}><Settings size={17} /></button><a className="icon-button" aria-label="退出登录" title="退出登录" data-testid="logout-link" href="/logout"><LogOut size={17} /></a></div>
       </header>
       {result && spec ? (
         <div className="app-body result-layout">
           <StrategySidebar templates={templates} selectedId={selectedId} versions={versions} onSelect={handleTemplate} onRestore={handleRestore} />
-          <ResultsView result={result} spec={spec} onEdit={() => { setResult(null); setBacktestId(null); }} onSave={handleSave} saving={saving} />
+          <ResultsView result={result} spec={spec} onEdit={() => { setResult(null); setBacktestId(null); }} onSave={handleSave} onApplySuggestion={handleApplySuggestion} saving={saving} />
         </div>
       ) : (
         <div className="app-body editor-layout">
@@ -293,6 +351,7 @@ export default function Home() {
           onUsePrompt={(prompt) => { setInput(prompt); setProductConsoleOpen(false); setResult(null); }}
         />
       ) : null}
+      {historyOpen ? <StrategyHistoryPanel activeStrategyId={strategyId} onClose={() => setHistoryOpen(false)} onLoadVersion={handleLoadVersion} /> : null}
       {settingsOpen ? (
         <div className="settings-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
           <section className="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">

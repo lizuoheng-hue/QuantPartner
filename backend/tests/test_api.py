@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import uuid
@@ -6,6 +7,7 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_quantpartner.db"
 
 from fastapi.testclient import TestClient
 
+from app.db import BacktestRecord, SessionLocal
 from app.main import app
 
 
@@ -23,8 +25,9 @@ def auth_headers(client: TestClient, prefix: str = "user") -> dict[str, str]:
 def test_health_and_templates():
     with TestClient(app) as client:
         assert client.get("/api/v1/health").status_code == 200
+        assert client.get("/health").status_code == 200
         templates = client.get("/api/v1/templates").json()
-        assert len(templates) == 3
+        assert len(templates) == 6
 
 
 def test_parse_endpoint_blocks_compliance_redline():
@@ -55,9 +58,29 @@ def test_full_strategy_backtest_version_and_idempotency_flow():
         task = client.get(f"/api/v1/backtests/{first.json()['id']}", headers=headers).json()
         assert task["status"] == "completed"
         assert task["result"]["disclaimer"]
+        with SessionLocal() as db:
+            record = db.get(BacktestRecord, first.json()["id"])
+            result_payload = json.loads(record.result_json)
+            result_payload.pop("diagnosis", None)
+            record.result_json = json.dumps(result_payload)
+            db.commit()
+        export = client.get(f"/api/v1/backtests/{first.json()['id']}/trades.csv", headers=headers)
+        assert export.status_code == 200
+        assert "date,symbol,name,side,price,quantity,fee" in export.text
         versions = client.get(f"/api/v1/strategies/{strategy_id}/versions", headers=headers).json()
         assert len(versions) == 2
         assert versions[0]["note"] == "回测完成自动保存"
+        assert {item["label"] for item in versions} == {"v001", "v002"}
+        strategies = client.get("/api/v1/strategies", headers=headers).json()
+        assert len(strategies) == 1
+        assert strategies[0]["id"] == strategy_id
+        assert strategies[0]["version_count"] == 2
+        assert strategies[0]["backtest_count"] == 1
+        assert strategies[0]["annual_return"] is not None
+        detail = client.get(f"/api/v1/strategies/{strategy_id}", headers=headers).json()
+        assert detail["id"] == strategy_id
+        assert len(detail["versions"]) == 2
+        assert detail["versions"][0]["backtest"]["diagnosis"]["summary"]
 
 
 def test_workspace_isolation_and_paper_order_audit():
